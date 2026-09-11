@@ -156,6 +156,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
                 val text = s.toString()
                 updateSuggestion(text)
+                btnClearInput.visibility = if (text.isNotEmpty()) android.view.View.VISIBLE else android.view.View.GONE
 
                 // Hide suggestion if user stops typing (shorter 1.5s timeout)
                 hideSuggestionRunnable?.let { handler.removeCallbacks(it) }
@@ -196,6 +197,13 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val btnCopy: ImageButton = findViewById(R.id.btnCopy)
         val btnMic: ImageButton = findViewById(R.id.btnMic)
         val btnCopyInput: ImageButton = findViewById(R.id.btnCopyInput)
+        val btnClearInput: ImageButton = findViewById(R.id.btnClearInput)
+
+        btnClearInput.setOnClickListener {
+            inputText.setText("")
+            outputText.text = ""
+            suggestionText.text = ""
+        }
 
         btnScan.setOnClickListener {
             checkCameraPermissionAndScan()
