@@ -73,17 +73,36 @@ class OnnxTranslator(private val context: Context) : AutoCloseable {
         }
     }
 
-    fun translate(text: String, sourceLang: String, targetLang: String): String {
-        if (text.isBlank()) return ""
-
-        val pair = when {
+    private fun getPair(sourceLang: String, targetLang: String): String? {
+        return when {
             (sourceLang == "English" && targetLang == "Cuyonon") || 
             (sourceLang == "Cuyonon" && targetLang == "English") -> "en-cu"
             (sourceLang == "English" && targetLang == "Tagalog") || 
             (sourceLang == "English" && targetLang == "Filipino") ||
-            (targetLang == "Tagalog" || targetLang == "Filipino") && sourceLang == "English" -> "en-tl"
-            else -> return "" // Not supported by ONNX
+            ((targetLang == "Tagalog" || targetLang == "Filipino") && sourceLang == "English") -> "en-tl"
+            else -> null
         }
+    }
+
+    /**
+     * Checks if the model's internal vocabulary contains this word.
+     */
+    fun knowsWord(word: String, sourceLang: String, targetLang: String): Boolean {
+        val pair = getPair(sourceLang, targetLang) ?: return false
+        try {
+            loadModel(pair)
+            val lower = word.lowercase().trim()
+            // In MarianMT models, whole words are often stored with a special prefix 
+            return vocab.containsKey(lower) || vocab.containsKey("\u2581$lower")
+        } catch (e: Exception) {
+            return false
+        }
+    }
+
+    fun translate(text: String, sourceLang: String, targetLang: String): String {
+        if (text.isBlank()) return ""
+
+        val pair = getPair(sourceLang, targetLang) ?: return ""
 
         return try {
             loadModel(pair)

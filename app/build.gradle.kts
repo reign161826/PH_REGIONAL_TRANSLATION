@@ -1,6 +1,6 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.google.services)
+    alias(libs.plugins.googleServices)
 }
 
 android {
@@ -61,6 +61,8 @@ dependencies {
     implementation(libs.androidx.cardview)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.mlkit.text.recognition)
+    implementation(libs.mlkit.language.id)
+    implementation(libs.mlkit.translate)
     implementation(libs.glide)
 
     // ONNX Runtime and Extensions

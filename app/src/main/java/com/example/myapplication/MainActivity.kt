@@ -29,6 +29,12 @@ import androidx.core.content.FileProvider
 import androidx.core.view.GravityCompat
 import androidx.drawerlayout.widget.DrawerLayout
 import com.google.android.material.navigation.NavigationView
+import com.google.mlkit.common.model.RemoteModelManager
+import com.google.mlkit.nl.languageid.LanguageIdentification
+import com.google.mlkit.nl.translate.TranslateLanguage
+import com.google.mlkit.nl.translate.TranslateRemoteModel
+import com.google.mlkit.nl.translate.Translation
+import com.google.mlkit.nl.translate.TranslatorOptions
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -62,6 +68,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var translationRunnable: Runnable? = null
     private var hideSuggestionRunnable: Runnable? = null
     private var isDialogShowing = false
+    private var isProcessingIntermediate = false
     private lateinit var onnxTranslator: OnnxTranslator
 
     private var cuyononDictionary = mutableMapOf<String, String>()
@@ -70,6 +77,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var englishWords = mutableSetOf<String>()
     private var filipinoWords = mutableSetOf<String>()
     private var cuyononWords = mutableSetOf<String>()
+
+    private val languageIdentifier = LanguageIdentification.getClient()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -111,7 +120,11 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 // Re-translate and update suggestions if there's text
                 val text = inputText.text.toString()
                 if (text.trim().isNotEmpty()) {
-                    performTranslation(text.trim())
+                    // Cancel any pending auto-translation to prioritize this manual language change
+                    translationRunnable?.let { handler.removeCallbacks(it) }
+                    
+                    // Manual translation trigger for manual language selection
+                    performTranslation(text.trim(), isManualTrigger = false)
                     updateSuggestion(text)
                 }
             }
@@ -131,6 +144,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         inputText = findViewById(R.id.inputText)
         outputText = findViewById(R.id.outputText)
         suggestionText = findViewById(R.id.suggestionText)
+        val btnClearInput: ImageButton = findViewById(R.id.btnClearInput)
 
         // Hide suggestion when focus is lost
         inputText.setOnFocusChangeListener { _, hasFocus ->
@@ -154,6 +168,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         inputText.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                if (isProcessingIntermediate) return
+                
                 val text = s.toString()
                 updateSuggestion(text)
                 btnClearInput.visibility = if (text.isNotEmpty()) android.view.View.VISIBLE else android.view.View.GONE
@@ -165,11 +181,12 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 }
                 handler.postDelayed(hideSuggestionRunnable!!, 1500)
 
-                translationRunnable?.let { handler.removeCallbacks(it) }
+                translationRunnable?.let { handler.removeCallbacks( it) }
                 translationRunnable = Runnable {
                     val trimmedText = text.trim()
                     if (trimmedText.isNotEmpty()) {
-                        performTranslation(trimmedText, isManualTrigger = false)
+                        // Use the intermediate pipeline for typed text too
+                        identifyAndTranslateIfNeeded(trimmedText, isManualTrigger = true)
                     } else {
                         outputText.text = ""
                     }
@@ -183,7 +200,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             if (actionId == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
                 val text = inputText.text.toString().trim()
                 if (text.isNotEmpty()) {
-                    performTranslation(text, isManualTrigger = true)
+                    identifyAndTranslateIfNeeded(text, isManualTrigger = true)
                 }
                 true
             } else {
@@ -197,7 +214,6 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val btnCopy: ImageButton = findViewById(R.id.btnCopy)
         val btnMic: ImageButton = findViewById(R.id.btnMic)
         val btnCopyInput: ImageButton = findViewById(R.id.btnCopyInput)
-        val btnClearInput: ImageButton = findViewById(R.id.btnClearInput)
 
         btnClearInput.setOnClickListener {
             inputText.setText("")
@@ -333,8 +349,16 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun listen() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak now...")
+        
+        // Use default locale but add a wide range of supported foreign languages
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault().toString())
+        intent.putExtra("android.speech.extra.EXTRA_ADDITIONAL_LANGUAGES", 
+            arrayOf("zh-CN", "ja-JP", "ko-KR", "es-ES", "fr-FR", "de-DE", "it-IT", "ru-RU", "hi-IN", "ar-SA", "fil-PH", "th-TH", "vi-VN", "id-ID", "ms-MY"))
+        
+        // Request multiple results to increase accuracy for foreign scripts
+        intent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 15)
+        
+        intent.putExtra(RecognizerIntent.EXTRA_PROMPT, "Speak in any language")
         try {
             startActivityForResult(intent, SPEECH_REQUEST_CODE)
         } catch (e: Exception) {
@@ -377,10 +401,9 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == SPEECH_REQUEST_CODE && resultCode == RESULT_OK && data != null) {
-            val result = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
-            if (!result.isNullOrEmpty()) {
-                inputText.setText(result[0])
-                performTranslation(result[0], isManualTrigger = true)
+            val results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
+            if (!results.isNullOrEmpty()) {
+                identifyAndTranslateIfNeeded(results, isManualTrigger = true)
             }
         } else if (requestCode == CAMERA_REQUEST_CODE && resultCode == RESULT_OK) {
             photoFile?.let {
@@ -388,6 +411,464 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 recognizeTextFromImage(bitmap)
             }
         }
+    }
+
+    private fun identifyAndTranslateIfNeeded(text: String, isManualTrigger: Boolean = true) {
+        val list = ArrayList<String>()
+        list.add(text)
+        identifyAndTranslateIfNeeded(list, isManualTrigger)
+    }
+
+    private fun identifyAndTranslateIfNeeded(results: ArrayList<String>, isManualTrigger: Boolean = true) {
+        if (results.isEmpty()) return
+        
+        isProcessingIntermediate = true
+        
+        val timeoutHandler = Handler(Looper.getMainLooper())
+        var hasFinished = false
+        val timeoutRunnable = Runnable {
+            if (!hasFinished) {
+                hasFinished = true
+                isProcessingIntermediate = false
+                updateInputText(results[0], forceEnglishSource = false, isManualTrigger = isManualTrigger)
+            }
+        }
+
+        // 1. Script Detection (Unambiguous) - Check all candidates
+        var detectedByScript: String? = null
+        var bestCandidateIndex = -1
+        
+        for (i in results.indices) {
+            val res = results[i]
+            val script = when {
+                res.any { it.code in 0xAC00..0xD7AF } -> "ko" // Hangul
+                res.any { it.code in 0x3040..0x309F || it.code in 0x30A0..0x30FF } -> "ja" // Hiragana/Katakana
+                res.any { it.code in 0x4E00..0x9FFF } -> "zh" // Kanji/Hanzi
+                else -> null
+            }
+            if (script != null) {
+                detectedByScript = script
+                bestCandidateIndex = i
+                break
+            }
+        }
+
+        if (detectedByScript != null) {
+            hasFinished = true
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            
+            // Reorder to put the script-matched result first
+            val orderedResults = ArrayList(results)
+            val bestRes = orderedResults.removeAt(bestCandidateIndex)
+            orderedResults.add(0, bestRes)
+            
+            processDetectedLanguages(listOf(detectedByScript), orderedResults, timeoutHandler, timeoutRunnable, isManualTrigger)
+            return
+        }
+
+        // 2. Quick check for manual mappings (Pinyin/Romaji)
+        for (res in results) {
+            getManualTranslation(res)?.let { manual ->
+                hasFinished = true
+                timeoutHandler.removeCallbacks(timeoutRunnable)
+                // Set language to English for the bridge mapping
+                setSpinnerSelection(spinnerSource, "English")
+                updateInputText(manual, forceEnglishSource = true, isManualTrigger = isManualTrigger)
+                return
+            }
+        }
+        
+        timeoutHandler.postDelayed(timeoutRunnable, 8000)
+
+        // 3. ML Kit Language ID (Probabilistic)
+        languageIdentifier.identifyLanguage(results[0])
+            .addOnSuccessListener { languageCode ->
+                if (hasFinished) return@addOnSuccessListener
+                
+                if (languageCode == "und") {
+                    languageIdentifier.identifyPossibleLanguages(results[0])
+                        .addOnSuccessListener { languages ->
+                            if (hasFinished) return@addOnSuccessListener
+                            processDetectedLanguages(languages.map { it.languageTag }, results, timeoutHandler, timeoutRunnable, isManualTrigger)
+                        }
+                        .addOnFailureListener {
+                            if (!hasFinished) {
+                                hasFinished = true
+                                isProcessingIntermediate = false
+                                timeoutHandler.removeCallbacks(timeoutRunnable)
+                                // Do not update input text here, wait for translation or timeout
+                            }
+                        }
+                } else {
+                    processDetectedLanguages(listOf(languageCode), results, timeoutHandler, timeoutRunnable, isManualTrigger)
+                }
+            }
+            .addOnFailureListener {
+                if (!hasFinished) {
+                    hasFinished = true
+                    isProcessingIntermediate = false
+                    timeoutHandler.removeCallbacks(timeoutRunnable)
+                    // Do not update input text here
+                }
+            }
+    }
+
+    private fun processDetectedLanguages(languageCodes: List<String>, results: ArrayList<String>, timeoutHandler: Handler, timeoutRunnable: Runnable, isManualTrigger: Boolean) {
+        val mlKitLanguages = TranslateLanguage.getAllLanguages()
+        var bestForeignLang: String? = null
+
+        for (code in languageCodes) {
+            val normalizedCode = code.split("-")[0]
+            val isEnglish = normalizedCode == "en"
+            val isFilipino = normalizedCode == "fil" || normalizedCode == "tl"
+            
+            if (!isEnglish && !isFilipino && mlKitLanguages.contains(normalizedCode)) {
+                bestForeignLang = normalizedCode
+                break
+            } else if (isEnglish || isFilipino) {
+                // If English or Filipino is detected, prefer direct input unless a strong foreign match exists
+                if (normalizedCode == "en") {
+                    updateInputText(results[0], forceEnglishSource = true, isManualTrigger = isManualTrigger)
+                } else {
+                    setSpinnerSelection(spinnerSource, "Filipino")
+                    updateInputText(results[0], isManualTrigger = isManualTrigger)
+                }
+                timeoutHandler.removeCallbacks(timeoutRunnable)
+                return
+            }
+        }
+
+        if (bestForeignLang != null) {
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            findBestTranslation(results, bestForeignLang, isManualTrigger)
+        } else {
+            isProcessingIntermediate = false
+            timeoutHandler.removeCallbacks(timeoutRunnable)
+            // Only update if it's already English or if we're sure it's Filipino
+            val topResult = results[0]
+            val isFilipino = languageCodes.any { it.startsWith("fil") || it.startsWith("tl") }
+            if (isFilipino) {
+                setSpinnerSelection(spinnerSource, "Filipino")
+            } else {
+                setSpinnerSelection(spinnerSource, "English")
+            }
+            updateInputText(topResult, isManualTrigger = isManualTrigger)
+        }
+    }
+
+    private fun findBestTranslation(candidates: ArrayList<String>, sourceLangCode: String, isManualTrigger: Boolean) {
+        val displayLang = try {
+            Locale.forLanguageTag(sourceLangCode).displayLanguage
+        } catch (e: Exception) {
+            sourceLangCode
+        }
+
+        val timeoutHandler = Handler(Looper.getMainLooper())
+        var isProcessFinished = false
+        val timeoutRunnable = Runnable {
+            if (!isProcessFinished) {
+                isProcessFinished = true
+                isProcessingIntermediate = false
+                Toast.makeText(this, "Translation timed out (Possible slow internet)", Toast.LENGTH_LONG).show()
+                updateInputText(candidates[0], isManualTrigger = isManualTrigger)
+            }
+        }
+        // Increase timeout for model download
+        timeoutHandler.postDelayed(timeoutRunnable, 25000)
+
+        Toast.makeText(this, "Detected $displayLang. Translating to English...", Toast.LENGTH_SHORT).show()
+
+        val options = TranslatorOptions.Builder()
+            .setSourceLanguage(sourceLangCode)
+            .setTargetLanguage(TranslateLanguage.ENGLISH)
+            .build()
+        val translator = Translation.getClient(options)
+        
+        val model = TranslateRemoteModel.Builder(sourceLangCode).build()
+
+        RemoteModelManager.getInstance().isModelDownloaded(model)
+            .addOnSuccessListener { isDownloaded ->
+                if (!isDownloaded) {
+                    Toast.makeText(this, "Downloading $displayLang translation model. Please wait...", Toast.LENGTH_LONG).show()
+                }
+
+                translator.downloadModelIfNeeded()
+                    .addOnSuccessListener {
+                        if (!isProcessFinished) {
+                            isProcessFinished = true
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            tryTranslate(candidates, 0, sourceLangCode, translator, isManualTrigger)
+                        } else {
+                            translator.close()
+                        }
+                    }
+                    .addOnFailureListener {
+                        if (!isProcessFinished) {
+                            isProcessFinished = true
+                            isProcessingIntermediate = false
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            Toast.makeText(this, "Failed to download $displayLang model", Toast.LENGTH_SHORT).show()
+                            updateInputText(candidates[0], isManualTrigger = isManualTrigger)
+                            translator.close()
+                        }
+                    }
+            }
+            .addOnFailureListener {
+                translator.downloadModelIfNeeded()
+                    .addOnSuccessListener {
+                        if (!isProcessFinished) {
+                            isProcessFinished = true
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            tryTranslate(candidates, 0, sourceLangCode, translator, isManualTrigger)
+                        } else {
+                            translator.close()
+                        }
+                    }
+                    .addOnFailureListener {
+                        if (!isProcessFinished) {
+                            isProcessFinished = true
+                            isProcessingIntermediate = false
+                            timeoutHandler.removeCallbacks(timeoutRunnable)
+                            updateInputText(candidates[0], isManualTrigger = isManualTrigger)
+                            translator.close()
+                        }
+                    }
+            }
+    }
+
+    private fun tryTranslate(candidates: List<String>, index: Int, sourceLangCode: String, translator: com.google.mlkit.nl.translate.Translator, isManualTrigger: Boolean) {
+        if (index >= candidates.size || index >= 10) {
+            isProcessingIntermediate = false
+            // If all translation attempts fail, fall back to English if possible, otherwise original
+            updateInputText(candidates[0], isManualTrigger = isManualTrigger)
+            translator.close()
+            return
+        }
+
+        val text = candidates[index]
+        if (text.isBlank()) {
+            tryTranslate(candidates, index + 1, sourceLangCode, translator, isManualTrigger)
+            return
+        }
+
+        translator.translate(text)
+            .addOnSuccessListener { translatedText ->
+                val cleanedTranslated = translatedText.trim()
+                val cleanedSource = text.trim()
+                
+                // If translation happened and is different from source
+                if (cleanedTranslated.isNotBlank() && !cleanedTranslated.equals(cleanedSource, ignoreCase = true)) {
+                    isProcessingIntermediate = false
+                    updateInputText(translatedText, forceEnglishSource = true, isManualTrigger = isManualTrigger)
+                    translator.close()
+                } else {
+                    // Check manual mapping
+                    val manual = getManualTranslation(text)
+                    if (manual != null) {
+                        isProcessingIntermediate = false
+                        updateInputText(manual, forceEnglishSource = true, isManualTrigger = isManualTrigger)
+                        translator.close()
+                    } else {
+                        // If this candidate failed to translate, try next
+                        tryTranslate(candidates, index + 1, sourceLangCode, translator, isManualTrigger)
+                    }
+                }
+            }
+            .addOnFailureListener {
+                tryTranslate(candidates, index + 1, sourceLangCode, translator, isManualTrigger)
+            }
+    }
+
+    private fun getManualTranslation(text: String): String? {
+        val mapping = mapOf(
+            // Chinese (Pinyin)
+            "ni hao" to "Hello",
+            "nihao" to "Hello",
+            "ni hao ma" to "How are you",
+            "xie xie" to "Thank you",
+            "xiexie" to "Thank you",
+            "shei shei" to "Thank you",
+            "bu ke qi" to "You're welcome",
+            "zai jian" to "Goodbye",
+            "dui bu qi" to "I'm sorry",
+            "mei guan xi" to "It's okay",
+            "wo ai ni" to "I love you",
+            "ping an" to "Peace",
+
+            // Japanese (Romaji)
+            "konnichiwa" to "Hello",
+            "konichiwa" to "Hello",
+            "ohayou" to "Good morning",
+            "konbanwa" to "Good evening",
+            "oyasumi" to "Good night",
+            "sayonara" to "Goodbye",
+            "arigato" to "Thank you",
+            "arigatou" to "Thank you",
+            "arigatou gozaimasu" to "Thank you very much",
+            "sumimasen" to "Excuse me",
+            "gomen" to "Sorry",
+            "gomenasai" to "I'm sorry",
+            "gomennasai" to "I'm sorry",
+            "itadakimasu" to "Let's eat",
+            "gochisousama" to "Thanks for the food",
+            "ai shiteru" to "I love you",
+            "daijoubu" to "I'm okay",
+            "ganbatte" to "Good luck",
+            "moshi moshi" to "Hello",
+
+            // Korean (Romanization)
+            "annyeong" to "Hello",
+            "annyeonghaseyo" to "Hello",
+            "kamsahamnida" to "Thank you",
+            "gomawo" to "Thank you",
+            "mianhae" to "Sorry",
+            "mian" to "Sorry",
+            "joesonghabnida" to "I'm sorry",
+            "gwaenchanha" to "It's okay",
+            "gwenchana" to "It's okay",
+            "saranghae" to "I love you",
+            "hajima" to "Don't do it",
+            "daebak" to "Awesome",
+            "jalga" to "Goodbye",
+            "jinjja" to "Really",
+            "kajja" to "Let's go",
+
+            // Spanish
+            "hola" to "Hello",
+            "gracias" to "Thank you",
+            "de nada" to "You're welcome",
+            "por favor" to "Please",
+            "adios" to "Goodbye",
+            "lo siento" to "I'm sorry",
+            "que tal" to "How are you",
+            "como estas" to "How are you",
+
+            // French
+            "bonjour" to "Hello",
+            "salut" to "Hello",
+            "merci" to "Thank you",
+            "s'il vous plait" to "Please",
+            "au revoir" to "Goodbye",
+            "pardon" to "Sorry",
+            "desole" to "Sorry",
+            "c'est la vie" to "That's life",
+
+            // Indonesian / Malay
+            "apa kabar" to "How are you",
+            "terima kasih" to "Thank you",
+            "sama sama" to "You're welcome",
+            "selamat pagi" to "Good morning",
+            "selamat siang" to "Good afternoon",
+            "maaf" to "Sorry",
+
+            // Vietnamese / Thai / Others
+            "xin chao" to "Hello",
+            "cam on" to "Thank you",
+            "sawasdee" to "Hello",
+            "khop khun" to "Thank you",
+            "namaste" to "Hello",
+            "salam" to "Hello",
+            "aloha" to "Hello",
+            "ciao" to "Hello"
+        )
+        
+        // Clean text: remove accents, then remove anything not a letter
+        val normalized = java.text.Normalizer.normalize(text, java.text.Normalizer.Form.NFD)
+        val alphabetOnly = normalized.lowercase()
+            .replace(Regex("\\p{InCombiningDiacriticalMarks}+"), "")
+            .replace(Regex("[^a-z]"), "")
+            .trim()
+            
+        if (alphabetOnly.isEmpty()) return null
+
+        // Try matching against keys (also stripped of spaces/punctuation)
+        for ((key, value) in mapping) {
+            val cleanKey = key.lowercase().replace(Regex("[^a-z]"), "")
+            if (cleanKey == alphabetOnly) return value
+        }
+            
+        return null
+    }
+
+    private fun updateInputText(text: String, forceEnglishSource: Boolean = false, isManualTrigger: Boolean = true) {
+        if (text.isBlank()) return
+        
+        if (forceEnglishSource) {
+            setSpinnerSelection(spinnerSource, "English")
+        }
+        
+        // Prevent recursive triggers and stop any pending translations
+        isProcessingIntermediate = true
+        translationRunnable?.let { handler.removeCallbacks(it) }
+        
+        val currentText = inputText.text.toString()
+        if (!currentText.equals(text, ignoreCase = true)) {
+            inputText.setText(text)
+            // Move cursor to end
+            inputText.setSelection(text.length)
+        }
+
+        isProcessingIntermediate = false
+        performTranslation(text, isManualTrigger = isManualTrigger)
+    }
+
+    private fun isKnownElsewhere(word: String): Boolean {
+        val lower = word.lowercase().trim()
+        return englishWords.contains(lower) || filipinoWords.contains(lower) || cuyononWords.contains(lower)
+    }
+
+    private fun performTranslation(text: String, isManualTrigger: Boolean = true) {
+        val sourceLang = spinnerSource.selectedItem.toString()
+        val targetLang = spinnerTarget.selectedItem.toString()
+        
+        // Auto-correct / Add word logic for single words
+        val trimmed = text.trim()
+        val suggestion = suggestionText.text.toString()
+        
+        val lower = trimmed.lowercase()
+        val wordList = when (sourceLang) {
+            "English" -> englishWords
+            "Filipino" -> filipinoWords
+            "Cuyonon" -> cuyononWords
+            else -> emptySet()
+        }
+
+        // NEW: Check if the ONNX model's database already knows this word
+        val modelKnowsWord = onnxTranslator.knowsWord(lower, sourceLang, targetLang)
+
+        if (wordList.contains(lower) || modelKnowsWord) {
+            // Prioritize the offline dictionary for exact known words
+            if (wordList.contains(lower)) {
+                val translated = translateOffline(text, sourceLang, targetLang)
+                outputText.text = translated
+                saveToHistory(text, translated)
+                return
+            }
+            // If wordList doesn't have it but the model knows it, let the model handle it below
+        } else if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty() && isManualTrigger) {
+            // Only show dialogs if BOTH the dictionary and the model don't know the word
+            // AND the word isn't recognized in any of our other language lists.
+            if (!isKnownElsewhere(lower)) {
+                val closest = findClosestWord(lower, wordList)
+                if (closest != null) {
+                    showCorrectionDialog(lower, closest, sourceLang)
+                } else {
+                    showAddWordDialog(lower, sourceLang)
+                }
+            }
+        }
+
+        // Try ONNX Model first for supported pairs
+        val onnxResult = onnxTranslator.translate(text, sourceLang, targetLang)
+        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
+            outputText.text = onnxResult
+            saveToHistory(text, onnxResult)
+            return
+        }
+
+        val translated = translateOffline(text, sourceLang, targetLang)
+        outputText.text = translated
+        saveToHistory(text, translated)
     }
 
     private fun recognizeTextFromImage(bitmap: Bitmap) {
@@ -398,8 +879,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             .addOnSuccessListener { visionText ->
                 val resultText = visionText.text
                 if (resultText.isNotEmpty()) {
-                    inputText.setText(resultText)
-                    performTranslation(resultText, isManualTrigger = true)
+                    identifyAndTranslateIfNeeded(resultText, isManualTrigger = true)
                 } else {
                     Toast.makeText(this, "No text found in image", Toast.LENGTH_SHORT).show()
                 }
@@ -425,6 +905,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             it.stop()
             it.shutdown()
         }
+        languageIdentifier.close()
         onnxTranslator.close()
         super.onDestroy()
     }
@@ -456,58 +937,12 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun setSpinnerSelection(spinner: Spinner, value: String) {
         for (i in 0 until spinner.count) {
             if (spinner.getItemAtPosition(i).toString().equals(value, ignoreCase = true)) {
-                spinner.setSelection(i)
+                if (spinner.selectedItemPosition != i) {
+                    spinner.setSelection(i)
+                }
                 break
             }
         }
-    }
-
-    private fun performTranslation(text: String, isManualTrigger: Boolean = true) {
-        val sourceLang = spinnerSource.selectedItem.toString()
-        val targetLang = spinnerTarget.selectedItem.toString()
-        
-        // Auto-correct / Add word logic for single words
-        val trimmed = text.trim()
-        val suggestion = suggestionText.text.toString()
-        
-        val lower = trimmed.lowercase()
-        val wordList = when (sourceLang) {
-            "English" -> englishWords
-            "Filipino" -> filipinoWords
-            "Cuyonon" -> cuyononWords
-            else -> emptySet()
-        }
-
-        if (wordList.contains(lower)) {
-            val translated = translateOffline(text, sourceLang, targetLang)
-            outputText.text = translated
-            saveToHistory(text, translated)
-            return
-        }
-
-        // Only show dialogs if it's a single word, not already covered by an autocomplete suggestion,
-        // and if it's either a manual trigger (like clicking a list item) or a long enough pause.
-        if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty()) {
-            val closest = findClosestWord(lower, wordList)
-            if (closest != null) {
-                showCorrectionDialog(lower, closest, sourceLang)
-            } else {
-                // Show "Add to Dictionary" when the user stops typing or triggers it manually
-                showAddWordDialog(lower, sourceLang)
-            }
-        }
-
-        // Try ONNX Model first for supported pairs
-        val onnxResult = onnxTranslator.translate(text, sourceLang, targetLang)
-        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
-            outputText.text = onnxResult
-            saveToHistory(text, onnxResult)
-            return
-        }
-
-        val translated = translateOffline(text, sourceLang, targetLang)
-        outputText.text = translated
-        saveToHistory(text, translated)
     }
 
     private fun calculateLevenshteinDistance(s1: String, s2: String): Int {
@@ -667,6 +1102,11 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                             englishWords.add(english)
                             if (cuyonon.isNotEmpty()) cuyononDictionary[english] = cuyonon
                         }
+                        // Explicitly add "hello" if it's not in CSV, or ensure CSV has it
+                        if (!englishWords.contains("hello")) {
+                            englishWords.add("hello")
+                            cuyononDictionary["hello"] = "kumusta"
+                        }
                         if (filipino.isNotEmpty()) {
                             filipinoWords.add(filipino)
                             if (cuyonon.isNotEmpty()) filipinoToCuyonon[filipino] = cuyonon
@@ -724,11 +1164,19 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val lowerText = text.lowercase().trim()
 
         if (target == "Cuyonon") {
-            if (source == "English") {
-                return cuyononDictionary[lowerText] ?: translateByWords(lowerText, cuyononDictionary)
-            } else if (source == "Filipino") {
-                return filipinoToCuyonon[lowerText] ?: translateByWords(lowerText, filipinoToCuyonon)
+            val dict = if (source == "English") cuyononDictionary else filipinoToCuyonon
+            val wordList = if (source == "English") englishWords else filipinoWords
+            
+            // 1. Exact Match
+            dict[lowerText]?.let { return it }
+            
+            // 2. Fuzzy Match for the whole phrase/word
+            findClosestWord(lowerText, wordList)?.let { closest ->
+                dict[closest]?.let { return it }
             }
+            
+            // 3. Word-by-word fallback
+            return translateByWords(lowerText, dict, wordList)
         } else if (source == "Cuyonon") {
             // Reverse lookup for Cuyonon to English/Filipino
             val targetMap = if (target == "English") {
@@ -736,7 +1184,16 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             } else {
                 filipinoToCuyonon.entries.associate { it.value to it.key }
             }
-            return targetMap[lowerText] ?: translateByWords(lowerText, targetMap)
+            
+            // 1. Exact Match
+            targetMap[lowerText]?.let { return it }
+            
+            // 2. Fuzzy Match
+            findClosestWord(lowerText, cuyononWords)?.let { closest ->
+                targetMap[closest]?.let { return it }
+            }
+            
+            return translateByWords(lowerText, targetMap, cuyononWords)
         }
 
         // Fallback to old hardcoded logic for English-Filipino
@@ -803,13 +1260,38 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         return translateByWords(lowerText, langDict)
     }
 
-    private fun translateByWords(text: String, dict: Map<String, String>): String {
-        val words = text.split("\\s+".toRegex())
-        if (words.size > 1) {
-            val translatedWords = words.map { word ->
-                dict[word] ?: word
+    private fun translateByWords(text: String, dict: Map<String, String>, wordList: Set<String> = emptySet()): String {
+        // Handle common punctuation and spaces
+        val tokens = text.split(Regex("(?<=\\s)|(?=\\s)|(?<=[\\p{Punct}])|(?=[[\\p{Punct}]])"))
+        if (tokens.size > 1) {
+            val translatedParts = tokens.map { part ->
+                val trimmed = part.trim()
+                if (trimmed.isEmpty() || Regex("[\\p{Punct}]").matches(trimmed)) {
+                    part
+                } else {
+                    val lower = trimmed.lowercase()
+                    // 1. Exact match for the word
+                    var translation = dict[lower]
+                    
+                    // 2. Fuzzy match for the word if not found and wordList is provided
+                    if (translation == null && wordList.isNotEmpty()) {
+                        findClosestWord(lower, wordList)?.let { closest ->
+                            translation = dict[closest]
+                        }
+                    }
+
+                    if (translation != null) {
+                        if (part.isNotEmpty() && part.first().isUpperCase()) {
+                            translation!!.replaceFirstChar { it.uppercase() }
+                        } else {
+                            translation!!
+                        }
+                    } else {
+                        part
+                    }
+                }
             }
-            return translatedWords.joinToString(" ")
+            return translatedParts.joinToString("").replace(Regex("\\s+"), " ").trim()
         }
         return text
     }

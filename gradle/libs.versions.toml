@@ -6,11 +6,13 @@ junitVersion = "1.1.5"
 espressoCore = "3.5.1"
 appcompat = "1.6.1"
 lifecycleRuntimeKtx = "2.6.1"
-kotlin = "2.2.10"
+kotlin = "2.0.21"
 material = "1.14.0"
 cardview = "1.0.0"
 constraintlayout = "2.1.4"
 mlkit-text-recognition = "19.0.0"
+mlkit-language-id = "17.0.6"
+mlkit-translate = "17.0.3"
 onnxruntime = "1.20.0"
 onnxruntime-extensions = "0.13.0"
 googleServices = "4.4.1"
@@ -28,6 +30,8 @@ material = { group = "com.google.android.material", name = "material", version.r
 androidx-cardview = { group = "androidx.cardview", name = "cardview", version.ref = "cardview" }
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 mlkit-text-recognition = { group = "com.google.android.gms", name = "play-services-mlkit-text-recognition", version.ref = "mlkit-text-recognition" }
+mlkit-language-id = { group = "com.google.mlkit", name = "language-id", version.ref = "mlkit-language-id" }
+mlkit-translate = { group = "com.google.mlkit", name = "translate", version.ref = "mlkit-translate" }
 onnx-runtime = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 onnx-extensions = { group = "com.microsoft.onnxruntime", name = "onnxruntime-extensions-android", version.ref = "onnxruntime-extensions" }
 firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
@@ -37,4 +41,6 @@ glide = { group = "com.github.bumptech.glide", name = "glide", version.ref = "gl
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
+kotlinAndroid = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlinCompose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+googleServices = { id = "com.google.gms.google-services", version.ref = "googleServices" }
