@@ -1,5 +1,5 @@
 {
-  "versionCode": 2,
+  "versionCode": 3,
   "downloadUrl": "https://github.com/reign161826/trans_app/releases/latest",
   "releaseNotes": "1. Removed heavy AI models to fix memory crashes.\n2. Added manual 'Check for Updates' feature.\n3. Switched to fast dictionary-based translation."
 }
