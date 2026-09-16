@@ -140,8 +140,29 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         btnSwitch.setOnClickListener {
             val sourcePos = spinnerSource.selectedItemPosition
             val targetPos = spinnerTarget.selectedItemPosition
+            
+            val currentInput = inputText.text.toString()
+            val currentOutput = outputText.text.toString()
+
+            // Swap text content (if output has placeholder, treat as empty)
+            val newIn = if (currentOutput == "Translated text here...") "" else currentOutput
+            inputText.setText(newIn)
+            
+            // Swap spinners (this will also trigger the language change listener)
             spinnerSource.setSelection(targetPos)
             spinnerTarget.setSelection(sourcePos)
+
+            // Temporarily put the old input into the output box
+            if (currentInput.isNotEmpty()) {
+                outputText.text = currentInput
+            } else if (newIn.isEmpty()) {
+                outputText.text = "Translated text here..."
+            }
+            
+            // Ensure a translation is triggered for the new input
+            if (newIn.trim().isNotEmpty()) {
+                performTranslation(newIn.trim(), isManualTrigger = false)
+            }
         }
 
         inputText = findViewById(R.id.inputText)
@@ -188,8 +209,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 translationRunnable = Runnable {
                     val trimmedText = text.trim()
                     if (trimmedText.isNotEmpty()) {
-                        // Use the intermediate pipeline for typed text too
-                        identifyAndTranslateIfNeeded(trimmedText, isManualTrigger = true)
+                        // Manual typing now bypasses detection and respects your spinner settings
+                        performTranslation(trimmedText, isManualTrigger = true)
                     } else {
                         outputText.text = ""
                     }

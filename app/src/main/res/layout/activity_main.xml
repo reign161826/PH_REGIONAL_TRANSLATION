@@ -33,17 +33,18 @@
             android:src="@drawable/ic_menu_burger"
             app:tint="#FFFFFF" />
 
+        <!-- Placeholder for symmetry -->
         <TextView
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
+            android:layout_marginTop="20dp"
             android:gravity="center"
             android:text="PH Regional"
             android:textColor="#4E5B2E"
             android:textSize="24sp"
             android:textStyle="bold" />
 
-        <!-- Placeholder for symmetry -->
         <View
             android:layout_width="80dp"
             android:layout_height="80dp" />
