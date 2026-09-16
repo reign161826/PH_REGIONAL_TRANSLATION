@@ -47,6 +47,9 @@ import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlin.concurrent.thread
 
 class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelectedListener, TextToSpeech.OnInitListener {
 
@@ -269,6 +272,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         handleIntent(intent)
         checkShowGuidelines()
+        checkForUpdates(isManualCheck = false) // Check silently on startup
     }
 
     private fun checkShowGuidelines() {
@@ -918,6 +922,10 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
     private fun handleIntent(intent: Intent?) {
         intent?.let {
+            if (it.getBooleanExtra("checkUpdate", false)) {
+                checkForUpdates(isManualCheck = true)
+            }
+
             val sourceText = it.getStringExtra("sourceText")
             val targetText = it.getStringExtra("targetText")
             val sourceLang = it.getStringExtra("sourceLang")
@@ -1337,12 +1345,76 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             R.id.nav_how_to_use -> {
                 startActivity(Intent(this, HowToUseActivity::class.java))
             }
+            R.id.nav_update -> {
+                checkForUpdates(isManualCheck = true) // Show feedback when clicked
+            }
             R.id.nav_home -> {
                 // Already on Home
             }
         }
         drawerLayout.closeDrawer(GravityCompat.START)
         return true
+    }
+
+    private fun checkForUpdates(isManualCheck: Boolean) {
+        val versionUrl = "https://raw.githubusercontent.com/reign161826/trans_app/master/version.json"
+        
+        if (isManualCheck) {
+            runOnUiThread {
+                Toast.makeText(this, "Checking for updates...", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        thread {
+            try {
+                val url = URL(versionUrl)
+                val connection = url.openConnection() as HttpURLConnection
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(response)
+                
+                val remoteVersionCode = json.getInt("versionCode")
+                val downloadUrl = json.getString("downloadUrl")
+                val releaseNotes = json.optString("releaseNotes", "New version available!")
+
+                val packageInfo = packageManager.getPackageInfo(packageName, 0)
+                val currentVersionCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                    packageInfo.longVersionCode.toInt()
+                } else {
+                    @Suppress("DEPRECATION")
+                    packageInfo.versionCode
+                }
+
+                runOnUiThread {
+                    if (remoteVersionCode > currentVersionCode) {
+                        showUpdateDialog(downloadUrl, releaseNotes)
+                    } else if (isManualCheck) {
+                        Toast.makeText(this, "App is up to date", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                if (isManualCheck) {
+                    runOnUiThread {
+                        Toast.makeText(this, "Update check failed: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun showUpdateDialog(downloadUrl: String, notes: String) {
+        androidx.appcompat.app.AlertDialog.Builder(this)
+            .setTitle("Update Available")
+            .setMessage(notes)
+            .setPositiveButton("Download") { _, _ ->
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
+                startActivity(intent)
+            }
+            .setNegativeButton("Later", null)
+            .show()
     }
 
     override fun onBackPressed() {
