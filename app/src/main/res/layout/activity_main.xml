@@ -8,16 +8,12 @@
     tools:context=".MainActivity">
 
     <!-- HEADER -->
-    <LinearLayout
+    <androidx.constraintlayout.widget.ConstraintLayout
         android:id="@+id/headerLayout"
         android:layout_width="0dp"
-        android:layout_height="wrap_content"
-        android:minHeight="100dp"
+        android:layout_height="100dp"
         android:background="#9CAB84"
-        android:gravity="center_vertical"
-        android:orientation="horizontal"
-        android:paddingStart="4dp"
-        android:paddingEnd="20dp"
+        android:clipChildren="false"
         app:layout_constraintEnd_toEndOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toTopOf="parent">
@@ -26,30 +22,32 @@
             android:id="@+id/btnMenu"
             android:layout_width="80dp"
             android:layout_height="80dp"
+            android:translationY="20dp"
             android:background="?attr/selectableItemBackgroundBorderless"
             android:contentDescription="@string/nav_open"
             android:padding="24dp"
             android:scaleType="fitCenter"
             android:src="@drawable/ic_menu_burger"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
             app:tint="#FFFFFF" />
 
-        <!-- Placeholder for symmetry -->
         <TextView
-            android:layout_width="0dp"
+            android:id="@+id/tvHeaderTitle"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginTop="20dp"
-            android:gravity="center"
             android:text="PH Regional"
             android:textColor="#4E5B2E"
             android:textSize="24sp"
-            android:textStyle="bold" />
+            android:textStyle="bold"
+            android:translationY="20dp"
+            app:layout_constraintBottom_toBottomOf="parent"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent" />
 
-        <View
-            android:layout_width="80dp"
-            android:layout_height="80dp" />
-
-    </LinearLayout>
+    </androidx.constraintlayout.widget.ConstraintLayout>
 
     <!-- LANGUAGE ROW -->
     <LinearLayout
