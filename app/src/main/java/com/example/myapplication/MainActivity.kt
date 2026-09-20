@@ -1140,12 +1140,28 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val width = (resources.displayMetrics.widthPixels * 0.90).toInt()
         dialog.window?.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
 
+        val labelSourceLanguage = dialog.findViewById<TextView>(R.id.label_source_language)
+        val labelTranslation1 = dialog.findViewById<TextView>(R.id.label_translation_1)
+        val labelTranslation2 = dialog.findViewById<TextView>(R.id.label_translation_2)
         val editWord = dialog.findViewById<EditText>(R.id.edit_word)
         val editTranslation1 = dialog.findViewById<EditText>(R.id.edit_translation_1)
         val editTranslation2 = dialog.findViewById<EditText>(R.id.edit_translation_2)
         val editDescription = dialog.findViewById<EditText>(R.id.edit_description)
         val btnSubmit = dialog.findViewById<android.widget.Button>(R.id.btn_submit_suggestion)
         val btnClose = dialog.findViewById<ImageButton>(R.id.btn_close_dialog)
+
+        // Set the source language text dynamically
+        labelSourceLanguage.text = getString(R.string.label_language_source, lang)
+
+        // Set specific target labels based on source language
+        val targets = when (lang) {
+            "English" -> Pair("Filipino Translation (Optional)", "Cuyonon Translation (Optional)")
+            "Filipino" -> Pair("English Translation (Optional)", "Cuyonon Translation (Optional)")
+            "Cuyonon" -> Pair("English Translation (Optional)", "Filipino Translation (Optional)")
+            else -> Pair("Translation 1 (Optional)", "Translation 2 (Optional)")
+        }
+        labelTranslation1.text = targets.first
+        labelTranslation2.text = targets.second
 
         editWord.setText(word)
 
@@ -1155,8 +1171,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             val translation2 = editTranslation2.text.toString().trim()
             val description = editDescription.text.toString().trim()
 
-            if (suggestedWord.isEmpty() || (translation1.isEmpty() && translation2.isEmpty())) {
-                Toast.makeText(this, "Please fill in the word and at least one translation", Toast.LENGTH_SHORT).show()
+            if (suggestedWord.isEmpty()) {
+                Toast.makeText(this, "Please fill in the word", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
 
@@ -1533,15 +1549,36 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun showUpdateDialog(downloadUrl: String, notes: String) {
-        androidx.appcompat.app.AlertDialog.Builder(this)
-            .setTitle("Update Available")
-            .setMessage(notes)
-            .setPositiveButton("Download") { _, _ ->
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
-                startActivity(intent)
-            }
-            .setNegativeButton("Later", null)
-            .show()
+        if (isFinishing || isDestroyed) return
+        val dialog = android.app.Dialog(this)
+        dialog.setContentView(R.layout.dialog_update)
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+
+        val width = (resources.displayMetrics.widthPixels * 0.90).toInt()
+        dialog.window?.setLayout(width, android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+
+        val textReleaseNotes = dialog.findViewById<TextView>(R.id.text_release_notes)
+        val btnLater = dialog.findViewById<android.widget.Button>(R.id.btn_later)
+        val btnDownload = dialog.findViewById<android.widget.Button>(R.id.btn_download)
+        val btnClose = dialog.findViewById<ImageButton>(R.id.btn_close_dialog)
+
+        textReleaseNotes.text = notes
+
+        btnDownload.setOnClickListener {
+            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl))
+            startActivity(intent)
+            dialog.dismiss()
+        }
+
+        btnLater.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        btnClose.setOnClickListener {
+            dialog.dismiss()
+        }
+
+        dialog.show()
     }
 
     override fun onBackPressed() {
