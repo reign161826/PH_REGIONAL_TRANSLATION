@@ -82,8 +82,9 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private var filipinoWords = mutableSetOf<String>()
     private var cuyononWords = mutableSetOf<String>()
 
-    private var enAssets = HashSet<String>()
-    private var filAssets = HashSet<String>()
+    private var enAssets = HashMap<String, String>()
+    private var filAssets = HashMap<String, String>()
+    private var cuAssets = HashMap<String, String>()
 
     private val languageIdentifier = LanguageIdentification.getClient()
 
@@ -289,8 +290,9 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         // Initialize asset caches to prevent UI lag on sequential recordings
         try {
-            assets.list("recordings/en")?.forEach { enAssets.add(it) }
-            assets.list("recordings/fil")?.forEach { filAssets.add(it) }
+            assets.list("recordings/en")?.forEach { enAssets[it.lowercase()] = it }
+            assets.list("recordings/fil")?.forEach { filAssets[it.lowercase()] = it }
+            assets.list("recordings/cu")?.forEach { cuAssets[it.lowercase()] = it }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -921,8 +923,12 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun speakText(text: String, isTarget: Boolean = true) {
         val lang = if (isTarget) spinnerTarget.selectedItem.toString() else spinnerSource.selectedItem.toString()
         
-        if (lang == "English" || lang == "Filipino") {
-            val langFolder = if (lang == "Filipino") "fil" else "en"
+        if (lang == "English" || lang == "Filipino" || lang == "Cuyonon") {
+            val langFolder = when (lang) {
+                "Filipino" -> "fil"
+                "Cuyonon" -> "cu"
+                else -> "en"
+            }
             val btn = if (isTarget) findViewById<ImageButton>(R.id.btnSpeak) else findViewById<ImageButton>(R.id.btnSpeakInput)
             
             // 1. Try to play as a single phrase recording first
@@ -973,16 +979,22 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         btn.setImageResource(R.drawable.ic_speak_active)
 
         val lang = if (isTarget) spinnerTarget.selectedItem.toString() else spinnerSource.selectedItem.toString()
-        val langFolder = if (lang == "Filipino") "fil" else "en"
+        val langFolder = when (lang) {
+            "Filipino" -> "fil"
+            "Cuyonon" -> "cu"
+            else -> "en"
+        }
 
         if (!playSingleWordRecording(word, langFolder) { playSequentialRecordings(words, index + 1, isTarget) }) {
             // If word has no recording, use TTS for this single word, then move to next
+            // Note: Cuyonon has no native TTS, so we use English as a best-effort fallback
             val locale = if (lang == "Filipino") Locale("fil", "PH") else Locale.US
             tts?.language = locale
-            val params = Bundle()
-            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "word_tts")
-            tts?.speak(word, TextToSpeech.QUEUE_ADD, params, "word_tts")
             
+            val params = Bundle()
+            params.putString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID, "word_tts_${System.currentTimeMillis()}")
+            
+            // Set listener before speaking to catch the completion
             tts?.setOnUtteranceProgressListener(object : android.speech.tts.UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) {}
                 override fun onDone(utteranceId: String?) {
@@ -992,6 +1004,8 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                     runOnUiThread { playSequentialRecordings(words, index + 1, isTarget) }
                 }
             })
+
+            tts?.speak(word, TextToSpeech.QUEUE_ADD, params, params.getString(TextToSpeech.Engine.KEY_PARAM_UTTERANCE_ID))
         }
     }
 
@@ -1000,28 +1014,42 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         if (cleaned.isEmpty() || Regex("[\\p{Punct}]").matches(cleaned)) return false
 
         val candidates = mutableListOf<String>()
-        candidates.add(word.trim())
         candidates.add(cleaned)
         candidates.add(cleaned.replace("'", "_").replace("n't", "n_t"))
         candidates.add(cleaned.replace(" ", "_"))
-        // Remove all punctuation and replace spaces with underscores for phrase matching
-        candidates.add(cleaned.replace(Regex("[\\p{Punct}]"), "").replace(" ", "_"))
+        candidates.add(cleaned.replace(" ", "-"))
+        // Remove all punctuation and replace spaces with underscores/hyphens for phrase matching
+        val noPunct = cleaned.replace(Regex("[\\p{Punct}]"), "")
+        candidates.add(noPunct.replace(" ", "_"))
+        candidates.add(noPunct.replace(" ", "-"))
         
         try {
-            val assetFiles = if (langFolder == "fil") filAssets else enAssets
+            val assetMap = when (langFolder) {
+                "fil" -> filAssets
+                "cu" -> cuAssets
+                else -> enAssets
+            }
+            
+            val extensions = listOf(".m4a", ".mp3")
+            
             for (candidate in candidates) {
                 if (candidate.isEmpty()) continue
-                val fileName = "$candidate.m4a"
-                if (assetFiles.contains(fileName)) {
-                    mediaPlayer?.release()
-                    mediaPlayer = android.media.MediaPlayer()
-                    val descriptor = assets.openFd("recordings/$langFolder/$fileName")
-                    mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-                    descriptor.close()
-                    mediaPlayer?.setOnCompletionListener { onComplete() }
-                    mediaPlayer?.prepare()
-                    mediaPlayer?.start()
-                    return true
+                
+                for (ext in extensions) {
+                    val searchName = "$candidate$ext"
+                    val actualFileName = assetMap[searchName]
+                    
+                    if (actualFileName != null) {
+                        mediaPlayer?.release()
+                        mediaPlayer = android.media.MediaPlayer()
+                        val descriptor = assets.openFd("recordings/$langFolder/$actualFileName")
+                        mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+                        descriptor.close()
+                        mediaPlayer?.setOnCompletionListener { onComplete() }
+                        mediaPlayer?.prepare()
+                        mediaPlayer?.start()
+                        return true
+                    }
                 }
             }
         } catch (e: Exception) {
