@@ -290,9 +290,21 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         // Initialize asset caches to prevent UI lag on sequential recordings
         try {
-            assets.list("recordings/en")?.forEach { enAssets[it.lowercase()] = it }
-            assets.list("recordings/fil")?.forEach { filAssets[it.lowercase()] = it }
-            assets.list("recordings/cu")?.forEach { cuAssets[it.lowercase()] = it }
+            val normalize = { fileName: String ->
+                val dotIndex = fileName.lastIndexOf('.')
+                if (dotIndex != -1) {
+                    val name = fileName.substring(0, dotIndex).lowercase()
+                        .replace("copy of ", "")
+                        .replace("copy ", "")
+                        .replace("(1)", "")
+                        .replace(Regex("[\\p{Punct}\\s]"), "")
+                    val ext = fileName.substring(dotIndex).lowercase()
+                    "$name$ext"
+                } else fileName.lowercase()
+            }
+            assets.list("recordings/en")?.forEach { enAssets[normalize(it)] = it }
+            assets.list("recordings/fil")?.forEach { filAssets[normalize(it)] = it }
+            assets.list("recordings/cu")?.forEach { cuAssets[normalize(it)] = it }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -1010,19 +1022,10 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun playSingleWordRecording(word: String, langFolder: String, onComplete: () -> Unit): Boolean {
-        val cleaned = word.trim().lowercase()
-        if (cleaned.isEmpty() || Regex("[\\p{Punct}]").matches(cleaned)) return false
+        // Normalize the word by removing all punctuation and spaces to match our normalized cache keys
+        val cleaned = word.trim().lowercase().replace(Regex("[\\p{Punct}\\s]"), "")
+        if (cleaned.isEmpty()) return false
 
-        val candidates = mutableListOf<String>()
-        candidates.add(cleaned)
-        candidates.add(cleaned.replace("'", "_").replace("n't", "n_t"))
-        candidates.add(cleaned.replace(" ", "_"))
-        candidates.add(cleaned.replace(" ", "-"))
-        // Remove all punctuation and replace spaces with underscores/hyphens for phrase matching
-        val noPunct = cleaned.replace(Regex("[\\p{Punct}]"), "")
-        candidates.add(noPunct.replace(" ", "_"))
-        candidates.add(noPunct.replace(" ", "-"))
-        
         try {
             val assetMap = when (langFolder) {
                 "fil" -> filAssets
@@ -1031,25 +1034,20 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
             
             val extensions = listOf(".m4a", ".mp3")
-            
-            for (candidate in candidates) {
-                if (candidate.isEmpty()) continue
+            for (ext in extensions) {
+                val searchName = "$cleaned$ext"
+                val actualFileName = assetMap[searchName]
                 
-                for (ext in extensions) {
-                    val searchName = "$candidate$ext"
-                    val actualFileName = assetMap[searchName]
-                    
-                    if (actualFileName != null) {
-                        mediaPlayer?.release()
-                        mediaPlayer = android.media.MediaPlayer()
-                        val descriptor = assets.openFd("recordings/$langFolder/$actualFileName")
-                        mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-                        descriptor.close()
-                        mediaPlayer?.setOnCompletionListener { onComplete() }
-                        mediaPlayer?.prepare()
-                        mediaPlayer?.start()
-                        return true
-                    }
+                if (actualFileName != null) {
+                    mediaPlayer?.release()
+                    mediaPlayer = android.media.MediaPlayer()
+                    val descriptor = assets.openFd("recordings/$langFolder/$actualFileName")
+                    mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+                    descriptor.close()
+                    mediaPlayer?.setOnCompletionListener { onComplete() }
+                    mediaPlayer?.prepare()
+                    mediaPlayer?.start()
+                    return true
                 }
             }
         } catch (e: Exception) {
