@@ -318,7 +318,12 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val dontShowAgain = prefs.getBoolean("dont_show_guidelines", false)
 
         if (!dontShowAgain) {
-            showGuidelinesDialog()
+            // Post with a small delay so that the activity window is fully active and loaded after splash screen
+            handler.postDelayed({
+                if (!isFinishing && !isDestroyed) {
+                    showGuidelinesDialog()
+                }
+            }, 600)
         }
     }
 
