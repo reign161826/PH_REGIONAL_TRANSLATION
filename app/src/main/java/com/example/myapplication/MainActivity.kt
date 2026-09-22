@@ -290,21 +290,20 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         // Initialize asset caches to prevent UI lag on sequential recordings
         try {
-            val normalize = { fileName: String ->
+            val normalizeName = { fileName: String ->
                 val dotIndex = fileName.lastIndexOf('.')
-                if (dotIndex != -1) {
-                    val name = fileName.substring(0, dotIndex).lowercase()
-                        .replace("copy of ", "")
-                        .replace("copy ", "")
-                        .replace("(1)", "")
-                        .replace(Regex("[\\p{Punct}\\s]"), "")
-                    val ext = fileName.substring(dotIndex).lowercase()
-                    "$name$ext"
-                } else fileName.lowercase()
+                val name = if (dotIndex != -1) fileName.substring(0, dotIndex) else fileName
+                name.lowercase()
+                    .replace("copy of ", "")
+                    .replace("copy", "")
+                    .replace(Regex("\\d+$"), "") // Remove numeric suffix like 'ito2'
+                    .replace(Regex("\\(.*?\\)"), "") // Remove parenthetical info like '(cow)'
+                    .replace(Regex("[\\p{Punct}\\s]"), "") // Remove punctuation and spaces
+                    .trim()
             }
-            assets.list("recordings/en")?.forEach { enAssets[normalize(it)] = it }
-            assets.list("recordings/fil")?.forEach { filAssets[normalize(it)] = it }
-            assets.list("recordings/cu")?.forEach { cuAssets[normalize(it)] = it }
+            assets.list("recordings/en")?.forEach { enAssets[normalizeName(it)] = it }
+            assets.list("recordings/fil")?.forEach { filAssets[normalizeName(it)] = it }
+            assets.list("recordings/cu")?.forEach { cuAssets[normalizeName(it)] = it }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -874,15 +873,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             return
         }
 
-        // 2. Try ONNX Model (Second Priority)
-        val onnxResult = onnxTranslator.translate(trimmed, sourceLang, targetLang)
-        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
-            outputText.text = onnxResult
-            saveToHistory(trimmed, onnxResult)
-            return
-        }
-
-        // 3. Auto-correct / Add word logic for single words if totally unknown
+        // 2. Check Auto-correct / Add word logic for single words early if entirely unknown in dictionary
         val wordList = when (sourceLang) {
             "English" -> englishWords
             "Filipino" -> filipinoWords
@@ -890,16 +881,25 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             else -> emptySet()
         }
 
-        val suggestion = suggestionText.text.toString()
-        if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty() && isManualTrigger) {
+        if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && isManualTrigger) {
             if (!isKnownElsewhere(lower) && !onnxTranslator.knowsWord(lower, sourceLang, targetLang)) {
                 val closest = findClosestWord(lower, wordList)
                 if (closest != null) {
                     showCorrectionDialog(lower, closest, sourceLang)
+                    return
                 } else {
                     showAddWordDialog(lower, sourceLang)
+                    return
                 }
             }
+        }
+
+        // 3. Try ONNX Model (Second Priority)
+        val onnxResult = onnxTranslator.translate(trimmed, sourceLang, targetLang)
+        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
+            outputText.text = onnxResult
+            saveToHistory(trimmed, onnxResult)
+            return
         }
 
         // 4. Final Fallback
@@ -975,13 +975,6 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             return
         }
 
-        val word = words[index].trim()
-        if (word.isEmpty() || Regex("[\\p{Punct}]+").matches(word)) {
-            // Skip empty items or punctuation marks entirely
-            playSequentialRecordings(words, index + 1, isTarget)
-            return
-        }
-
         val btn = if (isTarget) findViewById<ImageButton>(R.id.btnSpeak) else findViewById<ImageButton>(R.id.btnSpeakInput)
         btn.setImageResource(R.drawable.ic_speak_active)
 
@@ -990,6 +983,33 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             "Filipino" -> "fil"
             "Cuyonon" -> "cu"
             else -> "en"
+        }
+
+        // Greedy lookahead: Try to match combinations of up to 4 words (e.g., "tag pira")
+        for (length in 4 downTo 2) {
+            if (index + length <= words.size) {
+                val combinedPhrase = words.subList(index, index + length).joinToString(" ").trim()
+                // Check if this combined phrase has an exact audio file mapping
+                val cleanedPhrase = combinedPhrase.lowercase().replace(Regex("[\\p{Punct}\\s]"), "")
+                val assetMap = when (langFolder) {
+                    "fil" -> filAssets
+                    "cu" -> cuAssets
+                    else -> enAssets
+                }
+                if (assetMap.containsKey(cleanedPhrase)) {
+                    if (playSingleWordRecording(combinedPhrase, langFolder) { playSequentialRecordings(words, index + length, isTarget) }) {
+                        return
+                    }
+                }
+            }
+        }
+
+        // Fallback to single word if no multi-word combination matches
+        val word = words[index].trim()
+        if (word.isEmpty() || Regex("[\\p{Punct}]+").matches(word)) {
+            // Skip empty items or punctuation marks entirely
+            playSequentialRecordings(words, index + 1, isTarget)
+            return
         }
 
         if (!playSingleWordRecording(word, langFolder) { playSequentialRecordings(words, index + 1, isTarget) }) {
@@ -1028,22 +1048,18 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 else -> enAssets
             }
             
-            val extensions = listOf(".m4a", ".mp3")
-            for (ext in extensions) {
-                val searchName = "$cleaned$ext"
-                val actualFileName = assetMap[searchName]
-                
-                if (actualFileName != null) {
-                    mediaPlayer?.release()
-                    mediaPlayer = android.media.MediaPlayer()
-                    val descriptor = assets.openFd("recordings/$langFolder/$actualFileName")
-                    mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
-                    descriptor.close()
-                    mediaPlayer?.setOnCompletionListener { onComplete() }
-                    mediaPlayer?.prepare()
-                    mediaPlayer?.start()
-                    return true
-                }
+            val actualFileName = assetMap[cleaned]
+            
+            if (actualFileName != null) {
+                mediaPlayer?.release()
+                mediaPlayer = android.media.MediaPlayer()
+                val descriptor = assets.openFd("recordings/$langFolder/$actualFileName")
+                mediaPlayer?.setDataSource(descriptor.fileDescriptor, descriptor.startOffset, descriptor.length)
+                descriptor.close()
+                mediaPlayer?.setOnCompletionListener { onComplete() }
+                mediaPlayer?.prepare()
+                mediaPlayer?.start()
+                return true
             }
         } catch (e: Exception) {
             e.printStackTrace()
