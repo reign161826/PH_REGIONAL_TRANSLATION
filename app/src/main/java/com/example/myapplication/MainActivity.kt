@@ -863,12 +863,12 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun performTranslation(text: String, isManualTrigger: Boolean = true) {
         val sourceLang = spinnerSource.selectedItem.toString()
         val targetLang = spinnerTarget.selectedItem.toString()
-        
-        // Auto-correct / Add word logic for single words
         val trimmed = text.trim()
-        val suggestion = suggestionText.text.toString()
-        
         val lower = trimmed.lowercase()
+
+        // 1. Try CSV / Dictionary First (Highest Priority)
+        val offlineResult = translateOffline(trimmed, sourceLang, targetLang)
+        // If translateOffline found a match (result is different from input) or the word exists in wordList
         val wordList = when (sourceLang) {
             "English" -> englishWords
             "Filipino" -> filipinoWords
@@ -876,22 +876,24 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             else -> emptySet()
         }
 
-        // NEW: Check if the ONNX model's database already knows this word
-        val modelKnowsWord = onnxTranslator.knowsWord(lower, sourceLang, targetLang)
+        if (wordList.contains(lower) || !offlineResult.equals(trimmed, ignoreCase = true)) {
+            outputText.text = offlineResult
+            saveToHistory(trimmed, offlineResult)
+            return
+        }
 
-        if (wordList.contains(lower) || modelKnowsWord) {
-            // Prioritize the offline dictionary for exact known words
-            if (wordList.contains(lower)) {
-                val translated = translateOffline(text, sourceLang, targetLang)
-                outputText.text = translated
-                saveToHistory(text, translated)
-                return
-            }
-            // If wordList doesn't have it but the model knows it, let the model handle it below
-        } else if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty() && isManualTrigger) {
-            // Only show dialogs if BOTH the dictionary and the model don't know the word
-            // AND the word isn't recognized in any of our other language lists.
-            if (!isKnownElsewhere(lower)) {
+        // 2. Try ONNX Model (Second Priority)
+        val onnxResult = onnxTranslator.translate(trimmed, sourceLang, targetLang)
+        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
+            outputText.text = onnxResult
+            saveToHistory(trimmed, onnxResult)
+            return
+        }
+
+        // 3. Auto-correct / Add word logic for single words if totally unknown
+        val suggestion = suggestionText.text.toString()
+        if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty() && isManualTrigger) {
+            if (!isKnownElsewhere(lower) && !onnxTranslator.knowsWord(lower, sourceLang, targetLang)) {
                 val closest = findClosestWord(lower, wordList)
                 if (closest != null) {
                     showCorrectionDialog(lower, closest, sourceLang)
@@ -901,18 +903,11 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
             }
         }
 
-        // Try ONNX Model first for supported pairs
-        val onnxResult = onnxTranslator.translate(text, sourceLang, targetLang)
-        if (onnxResult.isNotEmpty() && !onnxResult.startsWith("Error:")) {
-            outputText.text = onnxResult
-            saveToHistory(text, onnxResult)
-            return
-        }
-
-        val translated = translateOffline(text, sourceLang, targetLang)
-        outputText.text = translated
-        saveToHistory(text, translated)
+        // 4. Final Fallback
+        outputText.text = offlineResult
+        saveToHistory(trimmed, offlineResult)
     }
+
 
     private fun recognizeTextFromImage(bitmap: Bitmap) {
         val image = InputImage.fromBitmap(bitmap, 0)
@@ -1264,33 +1259,51 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     }
 
     private fun loadDictionaryFromCsv() {
-        try {
-            val inputStream = assets.open("wordlist.csv")
-            val reader = inputStream.bufferedReader()
-            reader.useLines { lines ->
-                lines.toList().drop(1).forEach { line ->
-                    val tokens = line.split(",")
-                    if (tokens.size >= 3) {
-                        val english = tokens[0].trim().lowercase()
-                        val filipino = tokens[1].trim().lowercase()
-                        val cuyonon = tokens[2].trim().lowercase()
+        // Load original wordlist
+        loadCsvFile("wordlist.csv", isTriple = true)
+        // Load new English-Cuyonon
+        loadCsvFile("en-cuy.csv", isTriple = false, sourceIsEnglish = true)
+        // Load new Tagalog-Cuyonon
+        loadCsvFile("tag-cuy.csv", isTriple = false, sourceIsEnglish = false)
+    }
 
-                        if (english.isNotEmpty()) {
-                            englishWords.add(english)
-                            if (cuyonon.isNotEmpty()) cuyononDictionary[english] = cuyonon
+    private fun loadCsvFile(fileName: String, isTriple: Boolean, sourceIsEnglish: Boolean = true) {
+        try {
+            val inputStream = assets.open(fileName)
+            val reader = inputStream.bufferedReader()
+            val lines = reader.readLines()
+            if (lines.isEmpty()) return
+
+            lines.drop(1).forEach { line ->
+                // Simple regex to handle CSV with quotes and commas
+                val tokens = line.split(Regex(",(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)"))
+                if (isTriple && tokens.size >= 3) {
+                    val english = tokens[0].trim().replace("\"", "").lowercase()
+                    val filipino = tokens[1].trim().replace("\"", "").lowercase()
+                    val cuyonon = tokens[2].trim().replace("\"", "").lowercase()
+
+                    if (english.isNotEmpty()) {
+                        englishWords.add(english)
+                        if (cuyonon.isNotEmpty()) cuyononDictionary[english] = cuyonon
+                    }
+                    if (filipino.isNotEmpty()) {
+                        filipinoWords.add(filipino)
+                        if (cuyonon.isNotEmpty()) filipinoToCuyonon[filipino] = cuyonon
+                    }
+                    if (cuyonon.isNotEmpty()) cuyononWords.add(cuyonon)
+                } else if (!isTriple && tokens.size >= 2) {
+                    val source = tokens[0].trim().replace("\"", "").lowercase()
+                    val cuyonon = tokens[1].trim().replace("\"", "").lowercase()
+
+                    if (source.isNotEmpty() && cuyonon.isNotEmpty()) {
+                        if (sourceIsEnglish) {
+                            englishWords.add(source)
+                            cuyononDictionary[source] = cuyonon
+                        } else {
+                            filipinoWords.add(source)
+                            filipinoToCuyonon[source] = cuyonon
                         }
-                        // Explicitly add "hello" if it's not in CSV, or ensure CSV has it
-                        if (!englishWords.contains("hello")) {
-                            englishWords.add("hello")
-                            cuyononDictionary["hello"] = "kumusta"
-                        }
-                        if (filipino.isNotEmpty()) {
-                            filipinoWords.add(filipino)
-                            if (cuyonon.isNotEmpty()) filipinoToCuyonon[filipino] = cuyonon
-                        }
-                        if (cuyonon.isNotEmpty()) {
-                            cuyononWords.add(cuyonon)
-                        }
+                        cuyononWords.add(cuyonon)
                     }
                 }
             }
