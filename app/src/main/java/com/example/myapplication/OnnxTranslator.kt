@@ -33,7 +33,6 @@ class OnnxTranslator(private val context: Context) : AutoCloseable {
         val folder = when (pair) {
             "en-cu" -> "onnx/en_cu"
             "en-tl" -> "onnx/en_tl"
-            "tg-cu" -> "onnx/tg_cu"
             else -> throw IllegalArgumentException("Unsupported language pair: $pair")
         }
 
@@ -81,12 +80,10 @@ class OnnxTranslator(private val context: Context) : AutoCloseable {
             (sourceLang == "English" && targetLang == "Tagalog") || 
             (sourceLang == "English" && targetLang == "Filipino") ||
             ((targetLang == "Tagalog" || targetLang == "Filipino") && sourceLang == "English") -> "en-tl"
-            (sourceLang == "Filipino" && targetLang == "Cuyonon") ||
-            (sourceLang == "Tagalog" && targetLang == "Cuyonon") ||
-            (sourceLang == "Cuyonon" && (targetLang == "Filipino" || targetLang == "Tagalog")) -> "tg-cu"
             else -> null
         }
     }
+
 
     /**
      * Checks if the model's internal vocabulary contains this word.

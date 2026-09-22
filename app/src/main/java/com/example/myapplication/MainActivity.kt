@@ -866,17 +866,9 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         val trimmed = text.trim()
         val lower = trimmed.lowercase()
 
-        // 1. Try CSV / Dictionary First (Highest Priority)
+        // 1. Try CSV / Dictionary First (Improved matching)
         val offlineResult = translateOffline(trimmed, sourceLang, targetLang)
-        // If translateOffline found a match (result is different from input) or the word exists in wordList
-        val wordList = when (sourceLang) {
-            "English" -> englishWords
-            "Filipino" -> filipinoWords
-            "Cuyonon" -> cuyononWords
-            else -> emptySet()
-        }
-
-        if (wordList.contains(lower) || !offlineResult.equals(trimmed, ignoreCase = true)) {
+        if (!offlineResult.equals(trimmed, ignoreCase = true)) {
             outputText.text = offlineResult
             saveToHistory(trimmed, offlineResult)
             return
@@ -891,6 +883,13 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
 
         // 3. Auto-correct / Add word logic for single words if totally unknown
+        val wordList = when (sourceLang) {
+            "English" -> englishWords
+            "Filipino" -> filipinoWords
+            "Cuyonon" -> cuyononWords
+            else -> emptySet()
+        }
+
         val suggestion = suggestionText.text.toString()
         if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && suggestion.isEmpty() && isManualTrigger) {
             if (!isKnownElsewhere(lower) && !onnxTranslator.knowsWord(lower, sourceLang, targetLang)) {
@@ -907,6 +906,7 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         outputText.text = offlineResult
         saveToHistory(trimmed, offlineResult)
     }
+
 
 
     private fun recognizeTextFromImage(bitmap: Bitmap) {
@@ -1353,41 +1353,65 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
     private fun translateOffline(text: String, source: String, target: String): String {
         val lowerText = text.lowercase().trim()
 
-        if (target == "Cuyonon") {
-            val dict = if (source == "English") cuyononDictionary else filipinoToCuyonon
-            val wordList = if (source == "English") englishWords else filipinoWords
-            
-            // 1. Exact Match
-            dict[lowerText]?.let { return it }
-            
-            // 2. Fuzzy Match for the whole phrase/word
-            findClosestWord(lowerText, wordList)?.let { closest ->
-                dict[closest]?.let { return it }
+        // Get the appropriate dictionary map
+        val dict: Map<String, String>? = when {
+            target == "Cuyonon" -> if (source == "English") cuyononDictionary else filipinoToCuyonon
+            source == "Cuyonon" -> {
+                if (target == "English") {
+                    cuyononDictionary.entries.associate { it.value to it.key }
+                } else {
+                    filipinoToCuyonon.entries.associate { it.value to it.key }
+                }
+            }
+            else -> null // Fallback to hardcoded English-Filipino below
+        }
+
+        val wordList = when {
+            source == "English" && target == "Cuyonon" -> englishWords
+            source == "Filipino" && target == "Cuyonon" -> filipinoWords
+            source == "Cuyonon" -> cuyononWords
+            else -> emptySet()
+        }
+
+        if (dict != null) {
+            // 1. Longest Phrase Match (Improved Algorithm)
+            val words = lowerText.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            val result = mutableListOf<String>()
+            var i = 0
+            while (i < words.size) {
+                var foundMatch = false
+                // Try to find the longest phrase starting at index i
+                for (len in Math.min(words.size - i, 5) downTo 1) {
+                    val phrase = words.subList(i, i + len).joinToString(" ")
+                    if (dict.containsKey(phrase)) {
+                        result.add(dict[phrase]!!)
+                        i += len
+                        foundMatch = true
+                        break
+                    }
+                }
+                
+                if (!foundMatch) {
+                    // Try fuzzy match for the single word
+                    val word = words[i]
+                    val closest = findClosestWord(word, wordList)
+                    if (closest != null && dict.containsKey(closest)) {
+                        result.add(dict[closest]!!)
+                    } else {
+                        result.add(word) // Keep original if no match
+                    }
+                    i++
+                }
             }
             
-            // 3. Word-by-word fallback
-            return translateByWords(lowerText, dict, wordList)
-        } else if (source == "Cuyonon") {
-            // Reverse lookup for Cuyonon to English/Filipino
-            val targetMap = if (target == "English") {
-                cuyononDictionary.entries.associate { it.value to it.key }
-            } else {
-                filipinoToCuyonon.entries.associate { it.value to it.key }
+            val combined = result.joinToString(" ").trim()
+            if (combined.isNotEmpty() && !combined.equals(lowerText, ignoreCase = true)) {
+                return combined
             }
-            
-            // 1. Exact Match
-            targetMap[lowerText]?.let { return it }
-            
-            // 2. Fuzzy Match
-            findClosestWord(lowerText, cuyononWords)?.let { closest ->
-                targetMap[closest]?.let { return it }
-            }
-            
-            return translateByWords(lowerText, targetMap, cuyononWords)
         }
 
         // Fallback to old hardcoded logic for English-Filipino
-        val dictionary = mapOf(
+        val staticDictionary = mapOf(
             "English-Filipino" to mapOf(
                 "hello" to "kumusta",
                 "good morning" to "magandang umaga",
@@ -1441,12 +1465,10 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         )
 
         val key = "$source-$target"
-        val langDict = dictionary[key] ?: return text
+        val langDict = staticDictionary[key] ?: return text
         
-        // 1. Try to find exact match
+        // Try exact match or word-by-word for static dict
         langDict[lowerText]?.let { return it }
-        
-        // 2. Word-by-word fallback
         return translateByWords(lowerText, langDict)
     }
 
