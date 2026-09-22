@@ -867,7 +867,38 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
 
         // 1. Try CSV / Dictionary First (Improved matching)
         val offlineResult = translateOffline(trimmed, sourceLang, targetLang)
-        if (!offlineResult.equals(trimmed, ignoreCase = true)) {
+        
+        // Check if any word or phrase was actually found in the dictionary, rather than just returning the original text.
+        // translateOffline returns the original text if no part of it matches.
+        var dictHasMatch = false
+        val dictMap: Map<String, String>? = when {
+            targetLang == "Cuyonon" -> if (sourceLang == "English") cuyononDictionary else filipinoToCuyonon
+            sourceLang == "Cuyonon" -> {
+                if (targetLang == "English") {
+                    cuyononDictionary.entries.associate { it.value to it.key }
+                } else {
+                    filipinoToCuyonon.entries.associate { it.value to it.key }
+                }
+            }
+            else -> null
+        }
+        if (dictMap != null) {
+            val wordsList = lower.split(Regex("\\s+")).filter { it.isNotEmpty() }
+            var i = 0
+            while (i < wordsList.size) {
+                for (len in Math.min(wordsList.size - i, 5) downTo 1) {
+                    val phrase = wordsList.subList(i, i + len).joinToString(" ")
+                    if (dictMap.containsKey(phrase)) {
+                        dictHasMatch = true
+                        break
+                    }
+                }
+                if (dictHasMatch) break
+                i++
+            }
+        }
+
+        if (dictHasMatch) {
             outputText.text = offlineResult
             saveToHistory(trimmed, offlineResult)
             return
@@ -882,12 +913,13 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
         }
 
         if (trimmed.isNotEmpty() && !trimmed.contains(" ") && !isDialogShowing && isManualTrigger) {
-            if (!isKnownElsewhere(lower) && !onnxTranslator.knowsWord(lower, sourceLang, targetLang)) {
+            // Check if the word is NOT in the source language's dictionary
+            if (!wordList.contains(lower)) {
                 val closest = findClosestWord(lower, wordList)
                 if (closest != null) {
                     showCorrectionDialog(lower, closest, sourceLang)
                     return
-                } else {
+                } else if (!isKnownElsewhere(lower) && !onnxTranslator.knowsWord(lower, sourceLang, targetLang)) {
                     showAddWordDialog(lower, sourceLang)
                     return
                 }
@@ -1408,20 +1440,13 @@ class MainActivity : AppCompatActivity(), NavigationView.OnNavigationItemSelecte
                 }
                 
                 if (!foundMatch) {
-                    // Try fuzzy match for the single word
-                    val word = words[i]
-                    val closest = findClosestWord(word, wordList)
-                    if (closest != null && dict.containsKey(closest)) {
-                        result.add(dict[closest]!!)
-                    } else {
-                        result.add(word) // Keep original if no match
-                    }
+                    result.add(words[i]) // Keep original if no exact match
                     i++
                 }
             }
             
             val combined = result.joinToString(" ").trim()
-            if (combined.isNotEmpty() && !combined.equals(lowerText, ignoreCase = true)) {
+            if (combined.isNotEmpty()) {
                 return combined
             }
         }
